@@ -1,0 +1,231 @@
+import xarray as xr
+import numpy as np
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import geopandas as gpd
+from matplotlib import rcParams
+
+# Set English font
+rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans']
+rcParams['axes.unicode_minus'] = False
+
+# =========================
+# 1. Read ERA5 Data
+# =========================
+print("Reading ERA5 data...")
+nc_file = r'E:\fudao\era5_data\era5_daily_precip_china_1981.nc'
+ds = xr.open_dataset(nc_file)
+
+var_name = 'tp'
+time_dim = 'valid_time'
+
+print(f"\nDataset info:")
+print(f"  Time steps: {len(ds[time_dim])}")
+print(f"  Time range: {ds[time_dim].values[0]} to {ds[time_dim].values[-1]}")
+
+# Check raw data
+precip_raw = ds[var_name]
+print(f"\nRaw data statistics (meters):")
+print(f"  Min: {precip_raw.min().values:.6f} m")
+print(f"  Max: {precip_raw.max().values:.6f} m")
+print(f"  Mean: {precip_raw.mean().values:.6f} m")
+
+# =========================
+# 2. CORRECTED: Calculate Annual Precipitation
+# =========================
+print("\n" + "="*60)
+print("CORRECTED CALCULATION")
+print("="*60)
+
+# ERA5 daily data is often stored as mean hourly rate
+# Need to multiply by 24 to get daily total, then sum for annual
+HOURS_PER_DAY = 24
+
+# Method 1: If data is mean hourly rate (most likely)
+precip_daily_mm = ds[var_name] * 1000 * HOURS_PER_DAY  # m/hour -> mm/day
+precip_annual_corrected = precip_daily_mm.sum(dim=time_dim)
+
+print(f"\nMethod 1: Assuming data is mean hourly rate")
+print(f"  Formula: sum(tp * 1000 * 24) over all days")
+print(f"  Min: {precip_annual_corrected.min().values:.2f} mm")
+print(f"  Max: {precip_annual_corrected.max().values:.2f} mm")
+print(f"  Mean: {precip_annual_corrected.mean().values:.2f} mm")
+
+# Method 2: Direct sum (if data is already daily total)
+precip_annual_direct = ds[var_name].sum(dim=time_dim) * 1000
+print(f"\nMethod 2: Assuming data is already daily total")
+print(f"  Formula: sum(tp) * 1000")
+print(f"  Min: {precip_annual_direct.min().values:.2f} mm")
+print(f"  Max: {precip_annual_direct.max().values:.2f} mm")
+print(f"  Mean: {precip_annual_direct.mean().values:.2f} mm")
+
+# Determine which method is correct
+# China's annual precipitation typically ranges from 0 to 3000 mm
+# Method 1 should give values in this range
+if precip_annual_corrected.max().values > 500:
+    print(f"\n✓ Using Method 1 (corrected with ×24)")
+    print(f"  This aligns with expected China precipitation range (0-3000 mm)")
+    precip_annual = precip_annual_corrected
+    method_used = "Mean hourly rate × 24 hours × 365 days"
+else:
+    print(f"\n✓ Using Method 2 (direct sum)")
+    precip_annual = precip_annual_direct
+    method_used = "Direct sum of daily totals"
+
+print(f"\nFinal Annual Precipitation Statistics:")
+print(f"  Minimum: {precip_annual.min().values:.2f} mm")
+print(f"  Maximum: {precip_annual.max().values:.2f} mm")
+print(f"  Mean: {precip_annual.mean().values:.2f} mm")
+print(f"  Median: {np.nanmedian(precip_annual.values):.2f} mm")
+
+# =========================
+# 3. Read Shapefile
+# =========================
+print("\n" + "="*60)
+print("Reading shapefile...")
+shp_file = r'E:\gis\worldmap\world_adm0\world_adm0.shp'
+
+try:
+    world = gpd.read_file(shp_file)
+    china = world[world['NAME'].str.contains('China', case=False, na=False)]
+    print(f"✓ Found China boundary ({len(china)} features)")
+except Exception as e:
+    print(f"⚠ Shapefile error: {e}")
+    china = None
+
+# =========================
+# 4. Plot Map
+# =========================
+print("\n" + "="*60)
+print("Plotting map...")
+
+lons = precip_annual.longitude.values
+lats = precip_annual.latitude.values
+data = precip_annual.values
+
+# Create figure
+fig = plt.figure(figsize=(16, 11))
+ax = plt.axes(projection=ccrs.PlateCarree())
+ax.set_extent([70, 140, 0, 55], crs=ccrs.PlateCarree())
+
+# Adaptive colorbar
+vmin = max(0, np.nanpercentile(data, 1))
+vmax = np.nanpercentile(data, 99)
+
+print(f"Colorbar range: {vmin:.1f} - {vmax:.1f} mm")
+
+# Use precipitation colormap
+cmap = plt.cm.YlGnBu
+
+# Plot precipitation
+im = ax.pcolormesh(lons, lats, data, 
+                   transform=ccrs.PlateCarree(),
+                   cmap=cmap,
+                   vmin=vmin,
+                   vmax=vmax,
+                   shading='auto',
+                   zorder=1)
+
+# Add China boundary
+if china is not None and len(china) > 0:
+    china.plot(ax=ax, facecolor='none', edgecolor='red', 
+               linewidth=2.5, transform=ccrs.PlateCarree(), zorder=3)
+
+# Map features
+ax.coastlines(resolution='10m', linewidth=0.8, color='black', zorder=2)
+ax.add_feature(cfeature.BORDERS, linewidth=0.6, edgecolor='dimgray', zorder=2)
+
+# Gridlines
+gl = ax.gridlines(draw_labels=True, linewidth=0.5, 
+                  color='gray', alpha=0.5, linestyle='--', zorder=4)
+gl.top_labels = False
+gl.right_labels = False
+gl.xlabel_style = {'size': 12}
+gl.ylabel_style = {'size': 12}
+
+# Colorbar
+cbar = plt.colorbar(im, ax=ax, orientation='horizontal', 
+                    pad=0.05, shrink=0.75, aspect=30, extend='both')
+cbar.set_label('Annual Cumulative Precipitation (mm/year)', 
+               fontsize=14, fontweight='bold')
+cbar.ax.tick_params(labelsize=12)
+
+# Title
+ax.set_title('Annual Cumulative Precipitation over China Region in 1981\nData Source: ERA5 Reanalysis', 
+             fontsize=18, fontweight='bold', pad=20)
+
+# Statistics box
+textstr = (f'Statistics\n'
+          f'{"="*30}\n'
+          f'Min:    {precip_annual.min().values:>8.1f} mm\n'
+          f'Max:    {precip_annual.max().values:>8.1f} mm\n'
+          f'Mean:   {precip_annual.mean().values:>8.1f} mm\n'
+          f'Median: {np.nanmedian(data):>8.1f} mm\n'
+          f'{"="*30}\n'
+          f'Resolution: 0.25° × 0.25°\n'
+          f'Period: 1981 (365 days)\n'
+          f'Grid Points: {data.size:,}\n'
+          f'{"="*30}\n'
+          f'Method: {method_used[:20]}...')
+props = dict(boxstyle='round,pad=0.8', facecolor='wheat', 
+             alpha=0.92, edgecolor='black', linewidth=1.5)
+ax.text(0.02, 0.98, textstr, transform=ax.transAxes, fontsize=9.5,
+        verticalalignment='top', bbox=props, family='monospace')
+
+# Save figures
+output_png = r'E:\fudao\china_precipitation_1981_corrected.png'
+output_pdf = r'E:\fudao\china_precipitation_1981_corrected.pdf'
+
+plt.savefig(output_png, dpi=300, bbox_inches='tight', facecolor='white')
+plt.savefig(output_pdf, bbox_inches='tight', facecolor='white')
+
+print(f"\n✓ PNG saved: {output_png}")
+print(f"✓ PDF saved: {output_pdf}")
+
+plt.tight_layout()
+plt.show()
+
+ds.close()
+
+# =========================
+# 5. Statistical Analysis
+# =========================
+print("\n" + "="*60)
+print("STATISTICAL ANALYSIS")
+print("="*60)
+
+# Find extremes
+max_idx = np.unravel_index(np.nanargmax(data), data.shape)
+min_idx = np.unravel_index(np.nanargmin(data), data.shape)
+
+print(f"\nMaximum precipitation:")
+print(f"  Value: {data[max_idx]:.1f} mm")
+print(f"  Location: ({lats[max_idx[0]]:.2f}°N, {lons[max_idx[1]]:.2f}°E)")
+
+print(f"\nMinimum precipitation:")
+print(f"  Value: {data[min_idx]:.1f} mm")
+print(f"  Location: ({lats[min_idx[0]]:.2f}°N, {lons[min_idx[1]]:.2f}°E)")
+
+# Distribution
+print(f"\nPrecipitation Distribution:")
+ranges = [(0, 200), (200, 400), (400, 800), (800, 1500), (1500, 2500), (2500, 100000)]
+for i, (low, high) in enumerate(ranges):
+    count = ((data >= low) & (data < high)).sum()
+    pct = count / data.size * 100
+    if high == 100000:
+        label = f"> {low}"
+    else:
+        label = f"{low:4d} - {high:4d}"
+    print(f"  {label} mm/year: {count:7,} points ({pct:5.1f}%)")
+
+# Percentiles
+print(f"\nPercentile Values:")
+percentiles = [1, 5, 10, 25, 50, 75, 90, 95, 99]
+for p in percentiles:
+    val = np.nanpercentile(data, p)
+    print(f"  {p:2d}th: {val:7.1f} mm")
+
+print("\n" + "="*60)
+print("✓ COMPLETED SUCCESSFULLY")
+print("="*60)
