@@ -17,9 +17,6 @@ from matplotlib.colors import ListedColormap
 import warnings
 warnings.filterwarnings('ignore')
 
-# ===========================
-# ENHANCED FONT SETTINGS
-# ===========================
 rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans']
 rcParams['axes.unicode_minus'] = False
 rcParams['font.size'] = 14
@@ -30,9 +27,6 @@ rcParams['ytick.labelsize'] = 12
 rcParams['legend.fontsize'] = 12
 rcParams['figure.titlesize'] = 18
 
-# =========================
-# RUN MODE SELECTION
-# =========================
 print("="*80)
 print("EXTREME PRECIPITATION ANALYSIS - RUN MODE SELECTION")
 print("="*80)
@@ -54,9 +48,6 @@ if RUN_MODE == 1:
 elif RUN_MODE == 2:
     print("\n✓ Running COMPLETE ANALYSIS (Part 1 + Part 2 + Part 3)")
 
-# =========================
-# PART 1: CALCULATE INDICES
-# =========================
 print("\n" + "="*80)
 print("EXTREME PRECIPITATION INDICES CALCULATION (PART 1)")
 print("="*80)
@@ -95,9 +86,6 @@ else:
 
 precip_mm = ds[var_name] * conversion_factor
 
-# =========================
-# [2/6] Load China Boundary
-# =========================
 print("\n[2/6] Loading China boundary...")
 shp_file = r'E:\gis\worldmap\world_adm0\world_adm0.shp'
 
@@ -149,9 +137,6 @@ else:
 
 precip_masked = precip_mm.where(mask_da)
 
-# =========================
-# [3/6] Calculate Indices
-# =========================
 print("\n[3/6] Calculating extreme precipitation indices...")
 
 baseline_years = range(1981, 2011)
@@ -215,16 +200,10 @@ print(f"\n  ✓ Total valid samples: {len(df_indices):,}")
 print(f"\n  Index Statistics:")
 print(df_indices[['RX1day', 'RX5day', 'R20mm', 'R95p']].describe())
 
-# =========================
-# [4/6] Save Indices
-# =========================
 print("\n[4/6] Saving indices to file...")
 df_indices.to_csv(r'E:\fudao\extreme_indices_raw.csv', index=False)
 print(f"  ✓ Saved: E:\\fudao\\extreme_indices_raw.csv")
 
-# =========================
-# [5/6] Enhanced Spatial Visualization (12 subplots)
-# =========================
 print("\n[5/6] Creating 12-panel spatial comparison...")
 
 period1_years = range(1981, 2003)
@@ -260,7 +239,6 @@ for row_idx, (index_name, index_label) in enumerate(zip(indices_to_plot, indices
     map_p2_masked = np.where(mask_da.values, map_p2, np.nan)
     map_diff_masked = np.where(mask_da.values, map_diff, np.nan)
     
-    # Column 1: Period 1981-2002
     ax1 = plt.subplot(4, 3, row_idx*3 + 1, projection=ccrs.PlateCarree())
     ax1.set_extent([70, 140, 15, 55], crs=ccrs.PlateCarree())
     
@@ -289,7 +267,6 @@ for row_idx, (index_name, index_label) in enumerate(zip(indices_to_plot, indices
     
     panel_counter += 1
     
-    # Column 2: Period 2003-2024
     ax2 = plt.subplot(4, 3, row_idx*3 + 2, projection=ccrs.PlateCarree())
     ax2.set_extent([70, 140, 15, 55], crs=ccrs.PlateCarree())
     
@@ -318,7 +295,6 @@ for row_idx, (index_name, index_label) in enumerate(zip(indices_to_plot, indices
     
     panel_counter += 1
     
-    # Column 3: Difference
     ax3 = plt.subplot(4, 3, row_idx*3 + 3, projection=ccrs.PlateCarree())
     ax3.set_extent([70, 140, 15, 55], crs=ccrs.PlateCarree())
     
@@ -353,7 +329,6 @@ plt.tight_layout()
 plt.savefig(r'E:\fudao\indices_spatial_comparison_12panels.png', dpi=300, bbox_inches='tight')
 print(f"  ✓ Saved: E:\\fudao\\indices_spatial_comparison_12panels.png")
 
-# Temporal trends
 fig, axes = plt.subplots(2, 2, figsize=(18, 12))
 axes = axes.flatten()
 panel_labels_temp = ['(a)', '(b)', '(c)', '(d)']
@@ -400,14 +375,11 @@ print("✓ PART 1 COMPLETED - INDICES CALCULATED AND SAVED")
 print("="*80)
 
 if RUN_MODE == 1:
-    print("\n📌 To run clustering analysis, restart and select mode 2")
+    print("\n To run clustering analysis, restart and select mode 2")
     print("   Or load 'extreme_indices_raw.csv' in a separate script")
     plt.show()
     exit()
 
-# =========================
-# PART 2: CLUSTERING
-# =========================
 print("\n\n" + "="*80)
 print("EXTREME PRECIPITATION CLUSTERING ANALYSIS (PART 2)")
 print("="*80)
@@ -416,9 +388,6 @@ print("\n[1/7] Loading pre-calculated indices...")
 df_indices = pd.read_csv(r'E:\fudao\extreme_indices_raw.csv')
 print(f"  ✓ Loaded {len(df_indices):,} samples")
 
-# =========================
-# [2/7] STRATIFIED SAMPLING
-# =========================
 print("\n[2/7] Performing stratified sampling...")
 print("  Original dataset too large for direct clustering")
 print("  Strategy: Sample 50,000 representative points")
@@ -452,14 +421,10 @@ X_full_scaled = scaler.transform(X_full)
 print(f"\n  Feature correlations (sample):")
 print(df_sample[feature_names].corr().round(2))
 
-# =========================
-# [3/7] Determine Optimal K (Fixed K=3)
-# =========================
 print("\n[3/7] Using K=3 for clustering (as specified)...")
 
 optimal_k = 3
 
-# Still show optimization plot for reference
 K_range = range(2, 6)
 inertias = []
 db_scores = []
@@ -503,9 +468,6 @@ print(f"  ✓ Saved: E:\\fudao\\cluster_optimization_k3.png")
 
 print(f"\n  ✓ Using K={optimal_k} (user specified)")
 
-# =========================
-# [4/7] Final Clustering
-# =========================
 print(f"\n[4/7] Training final model on sampled data (K={optimal_k})...")
 kmeans_final = KMeans(n_clusters=optimal_k, random_state=42, n_init=50, max_iter=500)
 kmeans_final.fit(X_sample_scaled)
@@ -531,14 +493,8 @@ centers_df = pd.DataFrame(centers_original, columns=feature_names)
 centers_df.index = [f'Cluster {i}' for i in range(optimal_k)]
 print(centers_df.round(1))
 
-# =========================
-# [5/7] Visualizations
-# =========================
 print("\n[5/7] Creating visualizations...")
 
-colors = ['#FF6B6B', '#4ECDC4', '#45B7D1']
-
-# 5.1 Feature distributions
 fig, axes = plt.subplots(2, 3, figsize=(20, 14))
 axes = axes.flatten()
 panel_labels_dist = ['(a)', '(b)', '(c)', '(d)', '(e)', '(f)']
@@ -569,12 +525,10 @@ plt.tight_layout()
 plt.savefig(r'E:\fudao\cluster_distributions.png', dpi=300, bbox_inches='tight')
 print(f"  ✓ Saved: E:\\fudao\\cluster_distributions.png")
 
-# 5.2 COMBINED: Spatial distribution + PCA
 print("\n  Creating combined spatial + PCA figure...")
 
 fig = plt.figure(figsize=(24, 10))
 
-# Left panel: Spatial distribution
 ax_spatial = plt.subplot(1, 2, 1, projection=ccrs.PlateCarree())
 ax_spatial.set_extent([70, 140, 15, 55], crs=ccrs.PlateCarree())
 
@@ -623,7 +577,6 @@ cbar_spatial.set_label('Cluster Type', fontsize=15, fontweight='bold', labelpad=
 cbar_spatial.ax.set_xticklabels([f'Cluster {i}' for i in range(optimal_k)], fontsize=13)
 cbar_spatial.ax.tick_params(labelsize=13)
 
-# Right panel: PCA projection
 ax_pca = plt.subplot(1, 2, 2)
 
 pca = PCA(n_components=2)
@@ -658,9 +611,6 @@ plt.tight_layout()
 plt.savefig(r'E:\fudao\cluster_spatial_and_pca_combined.png', dpi=300, bbox_inches='tight')
 print(f"  ✓ Saved: E:\\fudao\\cluster_spatial_and_pca_combined.png")
 
-# =========================
-# [6/7] Cluster Interpretation
-# =========================
 print("\n[6/7] Cluster Interpretation:")
 print("="*80)
 
@@ -705,19 +655,14 @@ print("\n" + "="*80)
 print("✓ PART 2 COMPLETED - CLUSTERING FINISHED")
 print("="*80)
 
-# =========================
-# PART 3: EVENT STATISTICS
-# =========================
 print("\n\n" + "="*80)
 print("CLUSTER-BASED EVENT STATISTICS (PART 3)")
 print("="*80)
 
 print("\n[7/7] Calculating event statistics based on clustering...")
 
-# Group by spatial location and calculate event frequencies
 n_years = len(unique_years)
 
-# Initialize storage
 E_C0_freq = np.full((len(lats), len(lons)), np.nan)
 E_C1_freq = np.full((len(lats), len(lons)), np.nan)
 E_C2_freq = np.full((len(lats), len(lons)), np.nan)
@@ -726,27 +671,22 @@ E_dominant = np.full((len(lats), len(lons)), np.nan)
 
 print(f"  Processing {len(lats)} x {len(lons)} grid points...")
 
-# ⚠️ FIX: Changed range(lons) to range(len(lons))
 for i in range(len(lats)):
     if (i + 1) % 10 == 0:
         print(f"    Progress: {i+1}/{len(lats)} latitudes...")
     
-    for j in range(len(lons)):  # ✅ FIXED HERE
-        # Get all years for this grid point
+    for j in range(len(lons)):  
         grid_data = df_indices[(df_indices['lat_idx'] == i) & (df_indices['lon_idx'] == j)]
         
         if len(grid_data) == 0:
             continue
         
-        # Sort by year
         grid_data = grid_data.sort_values('year')
         
-        # Calculate frequencies
         E_C0_freq[i, j] = (grid_data['cluster'] == 0).sum()
         E_C1_freq[i, j] = (grid_data['cluster'] == 1).sum()
         E_C2_freq[i, j] = (grid_data['cluster'] == 2).sum()
         
-        # Calculate transitions
         clusters_seq = grid_data['cluster'].values
         if len(clusters_seq) > 1:
             transitions = np.sum(clusters_seq[1:] != clusters_seq[:-1])
@@ -754,7 +694,6 @@ for i in range(len(lats)):
         else:
             E_transition[i, j] = 0
         
-        # Dominant cluster
         cluster_counts = [
             E_C0_freq[i, j],
             E_C1_freq[i, j],
@@ -762,7 +701,6 @@ for i in range(len(lats)):
         ]
         E_dominant[i, j] = np.argmax(cluster_counts)
 
-# Apply mask
 E_C0_freq_masked = np.where(mask_da.values, E_C0_freq, np.nan)
 E_C1_freq_masked = np.where(mask_da.values, E_C1_freq, np.nan)
 E_C2_freq_masked = np.where(mask_da.values, E_C2_freq, np.nan)
@@ -771,7 +709,6 @@ E_dominant_masked = np.where(mask_da.values, E_dominant, np.nan)
 
 print("\n✓ Event statistics calculated!")
 
-# Print global statistics
 print(f"\n=== Event Statistics Summary ===")
 print(f"\n1. Cluster Frequency Distribution (years):")
 for k in range(optimal_k):
@@ -799,12 +736,8 @@ for k in range(optimal_k):
     pct = count / total_valid * 100 if total_valid > 0 else 0
     print(f"  Cluster {k} dominant: {count} grid points ({pct:.1f}%)")
 
-# =========================
-# Visualizations for Event Statistics
-# =========================
 print("\n  Creating event statistics visualizations...")
 
-# Figure 1: Cluster frequency spatial distributions (4 subplots)
 fig, axes = plt.subplots(2, 2, figsize=(20, 16), 
                          subplot_kw={'projection': ccrs.PlateCarree()})
 axes = axes.flatten()
@@ -857,7 +790,6 @@ plt.tight_layout(rect=[0, 0, 1, 0.96])
 plt.savefig(r'E:\fudao\cluster_event_frequency.png', dpi=300, bbox_inches='tight')
 print(f"  ✓ Saved: E:\\fudao\\cluster_event_frequency.png")
 
-# Figure 2: Dominant cluster type distribution
 fig, ax = plt.subplots(figsize=(16, 12), subplot_kw={'projection': ccrs.PlateCarree()})
 ax.set_extent([70, 140, 15, 55], crs=ccrs.PlateCarree())
 
@@ -896,7 +828,6 @@ plt.tight_layout()
 plt.savefig(r'E:\fudao\cluster_dominant_type.png', dpi=300, bbox_inches='tight')
 print(f"  ✓ Saved: E:\\fudao\\cluster_dominant_type.png")
 
-# Figure 3: Cluster transition hotspot
 fig, ax = plt.subplots(figsize=(16, 12), subplot_kw={'projection': ccrs.PlateCarree()})
 ax.set_extent([70, 140, 15, 55], crs=ccrs.PlateCarree())
 
@@ -933,7 +864,6 @@ plt.tight_layout()
 plt.savefig(r'E:\fudao\cluster_transition_hotspot.png', dpi=300, bbox_inches='tight')
 print(f"  ✓ Saved: E:\\fudao\\cluster_transition_hotspot.png")
 
-# Figure 4: Cluster intensity comparison (boxplot)
 fig, axes = plt.subplots(2, 2, figsize=(18, 14))
 axes = axes.flatten()
 
@@ -970,7 +900,6 @@ plt.tight_layout()
 plt.savefig(r'E:\fudao\cluster_intensity_comparison.png', dpi=300, bbox_inches='tight')
 print(f"  ✓ Saved: E:\\fudao\\cluster_intensity_comparison.png")
 
-# Figure 5: Cluster frequency statistics bar chart
 fig, ax = plt.subplots(figsize=(14, 8))
 
 freq_means = []
@@ -1012,7 +941,6 @@ plt.tight_layout()
 plt.savefig(r'E:\fudao\cluster_frequency_statistics.png', dpi=300, bbox_inches='tight')
 print(f"  ✓ Saved: E:\\fudao\\cluster_frequency_statistics.png")
 
-# Save event statistics to CSV
 print("\n  Saving event statistics to CSV...")
 
 event_stats_list = []
