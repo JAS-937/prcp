@@ -1,0 +1,367 @@
+import xarray as xr
+import numpy as np
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import geopandas as gpd
+from matplotlib import rcParams
+from matplotlib.colors import LinearSegmentedColormap
+from rasterio.features import geometry_mask
+from shapely.geometry import mapping
+
+# Set English font and increase default font sizes
+rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans']
+rcParams['axes.unicode_minus'] = False
+rcParams['font.size'] = 14  # Increase base font size
+
+print("="*70)
+print("PROCESSING MULTI-DECADAL PRECIPITATION DATA (1981-2024)")
+print("="*70)
+
+# =========================
+# 1. Read ERA5 Data
+# =========================
+print("\n[1/6] Reading ERA5 data...")
+nc_file = r'E:\fudao\total_year.nc'
+ds = xr.open_dataset(nc_file)
+
+# Identify variable and time dimension
+if 'tp' in ds.variables:
+    var_name = 'tp'
+elif 'precipitation' in ds.variables:
+    var_name = 'precipitation'
+else:
+    var_name = list(ds.data_vars)[0]
+    print(f"  Using variable: {var_name}")
+
+if 'valid_time' in ds.dims:
+    time_dim = 'valid_time'
+elif 'time' in ds.dims:
+    time_dim = 'time'
+else:
+    time_dim = list(ds.dims)[0]
+
+print(f"  Variable: {var_name}")
+print(f"  Time dimension: {time_dim}")
+print(f"  Time steps: {len(ds[time_dim])}")
+print(f"  Time range: {ds[time_dim].values[0]} to {ds[time_dim].values[-1]}")
+print(f"  Spatial shape: {ds[var_name].shape}")
+
+# =========================
+# 2. Read China Shapefile
+# =========================
+print("\n[2/6] Reading China boundary shapefile...")
+shp_file = r'E:\gis\worldmap\world_adm0\world_adm0.shp'
+
+try:
+    world = gpd.read_file(shp_file)
+    # Try different field names for China
+    china_candidates = ['China', 'CHINA', 'CHN', 'People']
+    china = None
+    
+    for field in world.columns:
+        if world[field].dtype == 'object':
+            for candidate in china_candidates:
+                mask = world[field].astype(str).str.contains(candidate, case=False, na=False)
+                if mask.any():
+                    china = world[mask]
+                    print(f"  ✓ Found China using field '{field}' with keyword '{candidate}'")
+                    break
+        if china is not None:
+            break
+    
+    if china is None or len(china) == 0:
+        raise ValueError("China boundary not found in shapefile")
+    
+    # Dissolve multiple features into one
+    china = china.dissolve()
+    print(f"  ✓ China boundary loaded successfully")
+    
+except Exception as e:
+    print(f"  ✗ Error reading shapefile: {e}")
+    print("  Proceeding without masking...")
+    china = None
+
+# =========================
+# 3. Create China Mask
+# =========================
+print("\n[3/6] Creating China mask...")
+
+lons = ds.longitude.values
+lats = ds.latitude.values
+
+if china is not None:
+    # Create coordinate grid
+    lon_grid, lat_grid = np.meshgrid(lons, lats)
+    
+    # Create mask using rasterio
+    china_geom = [mapping(geom) for geom in china.geometry]
+    
+    # Transform for rasterio (needs specific format)
+    from affine import Affine
+    transform = Affine.translation(lons[0] - (lons[1]-lons[0])/2, 
+                                   lats[0] - (lats[1]-lats[0])/2) * \
+                Affine.scale(lons[1]-lons[0], lats[1]-lats[0])
+    
+    mask = geometry_mask(china_geom, 
+                        out_shape=(len(lats), len(lons)),
+                        transform=transform,
+                        invert=True)
+    
+    # Convert to xarray DataArray
+    mask_da = xr.DataArray(mask, 
+                          coords={'latitude': lats, 'longitude': lons},
+                          dims=['latitude', 'longitude'])
+    
+    print(f"  ✓ Mask created: {mask.sum()} grid points inside China")
+    print(f"  Coverage: {mask.sum() / mask.size * 100:.1f}% of domain")
+else:
+    # No mask - use all data
+    mask_da = xr.DataArray(np.ones((len(lats), len(lons)), dtype=bool),
+                          coords={'latitude': lats, 'longitude': lons},
+                          dims=['latitude', 'longitude'])
+    print("  ⚠ Using full domain (no China mask)")
+
+# =========================
+# 4. Calculate Period Averages
+# =========================
+print("\n[4/6] Calculating period averages...")
+
+# Determine if data needs correction (hourly rate vs daily total)
+HOURS_PER_DAY = 24
+
+# Convert time to pandas datetime for easier filtering
+times = ds[time_dim].values
+years = np.array([np.datetime64(t, 'Y').astype(int) + 1970 for t in times])
+
+print(f"  Available years: {years.min()} - {years.max()}")
+
+# Define periods (UPDATED TIME RANGES)
+period1_mask = (years >= 1981) & (years <= 2002)
+period2_mask = (years >= 2003) & (years <= 2024)
+
+print(f"  Period 1 (1981-2002): {period1_mask.sum()} days")
+print(f"  Period 2 (2003-2024): {period2_mask.sum()} days")
+
+# Calculate annual precipitation for each period
+# Test if data needs ×24 correction
+test_annual = ds[var_name].isel({time_dim: slice(0, 365)}).sum(dim=time_dim) * 1000
+test_max = test_annual.max().values
+
+if test_max < 500:  # Likely hourly rate
+    print(f"  Detected hourly rate data (max test value: {test_max:.1f} mm)")
+    print(f"  Applying correction: × {HOURS_PER_DAY} hours")
+    conversion_factor = 1000 * HOURS_PER_DAY  # m/hour -> mm/day
+else:
+    print(f"  Detected daily total data (max test value: {test_max:.1f} mm)")
+    conversion_factor = 1000  # m -> mm
+
+# Period 1: 1981-2002
+period1_data = ds[var_name].isel({time_dim: period1_mask})
+period1_years = years[period1_mask]
+annual_totals_p1 = []
+
+for year in range(1981, 2003):
+    year_mask = period1_years == year
+    if year_mask.sum() > 0:
+        year_total = period1_data.isel({time_dim: year_mask}).sum(dim=time_dim) * conversion_factor
+        annual_totals_p1.append(year_total)
+
+if len(annual_totals_p1) > 0:
+    period1_avg = xr.concat(annual_totals_p1, dim='year').mean(dim='year')
+    print(f"  ✓ Period 1: Processed {len(annual_totals_p1)} years")
+else:
+    raise ValueError("No data found for Period 1 (1981-2002)")
+
+# Period 2: 2003-2024
+period2_data = ds[var_name].isel({time_dim: period2_mask})
+period2_years = years[period2_mask]
+annual_totals_p2 = []
+
+for year in range(2003, 2025):
+    year_mask = period2_years == year
+    if year_mask.sum() > 0:
+        year_total = period2_data.isel({time_dim: year_mask}).sum(dim=time_dim) * conversion_factor
+        annual_totals_p2.append(year_total)
+
+if len(annual_totals_p2) > 0:
+    period2_avg = xr.concat(annual_totals_p2, dim='year').mean(dim='year')
+    print(f"  ✓ Period 2: Processed {len(annual_totals_p2)} years")
+else:
+    raise ValueError("No data found for Period 2 (2003-2024)")
+
+# Calculate difference
+difference = period2_avg - period1_avg
+
+# Apply China mask
+period1_avg_masked = period1_avg.where(mask_da)
+period2_avg_masked = period2_avg.where(mask_da)
+difference_masked = difference.where(mask_da)
+
+print(f"\nPeriod 1 (1981-2002) Statistics:")
+print(f"  Min:    {period1_avg_masked.min().values:.1f} mm/year")
+print(f"  Max:    {period1_avg_masked.max().values:.1f} mm/year")
+print(f"  Mean:   {period1_avg_masked.mean().values:.1f} mm/year")
+
+print(f"\nPeriod 2 (2003-2024) Statistics:")
+print(f"  Min:    {period2_avg_masked.min().values:.1f} mm/year")
+print(f"  Max:    {period2_avg_masked.max().values:.1f} mm/year")
+print(f"  Mean:   {period2_avg_masked.mean().values:.1f} mm/year")
+
+print(f"\nDifference (P2 - P1) Statistics:")
+print(f"  Min:    {difference_masked.min().values:.1f} mm/year")
+print(f"  Max:    {difference_masked.max().values:.1f} mm/year")
+print(f"  Mean:   {difference_masked.mean().values:.1f} mm/year")
+
+# =========================
+# 5. Plot Three-Panel Map
+# =========================
+print("\n[5/6] Creating three-panel comparison plot...")
+
+fig = plt.figure(figsize=(26, 10))  # Increased figure size
+
+# Define colormaps
+cmap_precip = plt.cm.YlGnBu
+cmap_diff = plt.cm.RdBu_r  # Red=increase, Blue=decrease
+
+# Colorbar ranges
+vmin_p1 = max(0, np.nanpercentile(period1_avg_masked.values, 1))
+vmax_p1 = np.nanpercentile(period1_avg_masked.values, 99)
+
+vmin_p2 = max(0, np.nanpercentile(period2_avg_masked.values, 1))
+vmax_p2 = np.nanpercentile(period2_avg_masked.values, 99)
+
+# Symmetric range for difference
+diff_abs_max = max(abs(np.nanpercentile(difference_masked.values, 1)),
+                   abs(np.nanpercentile(difference_masked.values, 99)))
+vmin_diff = -diff_abs_max
+vmax_diff = diff_abs_max
+
+panels = [
+    (period1_avg_masked, '(a) Period 1: 1981-2002\nMean Annual Precipitation', 
+     cmap_precip, vmin_p1, vmax_p1, 'mm/year', 'both'),
+    (period2_avg_masked, '(b) Period 2: 2003-2024\nMean Annual Precipitation', 
+     cmap_precip, vmin_p2, vmax_p2, 'mm/year', 'both'),
+    (difference_masked, '(c) Change (2003-2024 minus 1981-2002)\nPrecipitation Anomaly', 
+     cmap_diff, vmin_diff, vmax_diff, 'mm/year', 'both')
+]
+
+for idx, (data, title, cmap, vmin, vmax, units, extend) in enumerate(panels):
+    ax = plt.subplot(1, 3, idx+1, projection=ccrs.PlateCarree())
+    
+    # Set extent to China region
+    ax.set_extent([70, 140, 15, 55], crs=ccrs.PlateCarree())
+    
+    # Plot data
+    im = ax.pcolormesh(lons, lats, data.values,
+                      transform=ccrs.PlateCarree(),
+                      cmap=cmap,
+                      vmin=vmin,
+                      vmax=vmax,
+                      shading='auto',
+                      zorder=1)
+    
+    # Add China boundary
+    if china is not None:
+        china.plot(ax=ax, facecolor='none', edgecolor='red', 
+                  linewidth=2.5, transform=ccrs.PlateCarree(), zorder=3)
+    
+    # Map features
+    ax.coastlines(resolution='10m', linewidth=1.2, color='black', zorder=2)
+    ax.add_feature(cfeature.BORDERS, linewidth=0.8, edgecolor='gray', zorder=2)
+    
+    # Gridlines with LARGER font
+    gl = ax.gridlines(draw_labels=True, linewidth=0.6, 
+                     color='gray', alpha=0.5, linestyle='--', zorder=4)
+    gl.top_labels = False
+    gl.right_labels = False
+    if idx > 0:  # Only show latitude labels on leftmost panel
+        gl.left_labels = False
+    gl.xlabel_style = {'size': 15, 'weight': 'bold'}  # Increased from 10
+    gl.ylabel_style = {'size': 15, 'weight': 'bold'}  # Increased from 10
+    
+    # Title with panel label - LARGER font
+    ax.set_title(title, fontsize=20, fontweight='bold', pad=15)  # Increased from 14
+    
+    # Colorbar with LARGER font
+    cbar = plt.colorbar(im, ax=ax, orientation='horizontal', 
+                       pad=0.05, shrink=0.85, aspect=25, extend=extend)
+    cbar.set_label(units, fontsize=16, fontweight='bold')  # Increased from 11
+    cbar.ax.tick_params(labelsize=14)  # Increased from 10
+    
+    # Statistics text with LARGER font
+    textstr = (f'Min:  {np.nanmin(data.values):>7.1f}\n'
+              f'Max:  {np.nanmax(data.values):>7.1f}\n'
+              f'Mean: {np.nanmean(data.values):>7.1f}\n'
+              f'Std:  {np.nanstd(data.values):>7.1f}')
+    
+    props = dict(boxstyle='round,pad=0.6', facecolor='wheat', 
+                alpha=0.9, edgecolor='black', linewidth=1.5)
+    ax.text(0.02, 0.98, textstr, transform=ax.transAxes, fontsize=13,  # Increased from 9
+           verticalalignment='top', bbox=props, family='monospace', weight='bold')
+
+# Main title with LARGER font
+fig.suptitle('Annual Precipitation Change over China: 1981-2002 vs 2003-2024\n' + 
+            'Data Source: ERA5 Reanalysis', 
+            fontsize=22, fontweight='bold', y=0.98)  # Increased from 18
+
+# Save figures
+output_png = r'E:\fudao\china_precipitation_comparison_1981_2024.png'
+output_pdf = r'E:\fudao\china_precipitation_comparison_1981_2024.pdf'
+
+plt.tight_layout(rect=[0, 0, 1, 0.96])
+plt.savefig(output_png, dpi=300, bbox_inches='tight', facecolor='white')
+plt.savefig(output_pdf, bbox_inches='tight', facecolor='white')
+
+print(f"\n✓ PNG saved: {output_png}")
+print(f"✓ PDF saved: {output_pdf}")
+
+plt.show()
+
+# =========================
+# 6. Statistical Summary
+# =========================
+print("\n[6/6] Statistical Summary")
+print("="*70)
+
+print("\nSpatial Coverage:")
+print(f"  Total grid points: {mask_da.size:,}")
+print(f"  China grid points: {mask_da.sum().values:,}")
+print(f"  Coverage: {mask_da.sum().values / mask_da.size * 100:.1f}%")
+
+print("\nPeriod 1 (1981-2002):")
+print(f"  Number of years: {len(annual_totals_p1)}")
+print(f"  Mean annual precipitation: {np.nanmean(period1_avg_masked.values):.1f} mm/year")
+print(f"  Driest region: {np.nanmin(period1_avg_masked.values):.1f} mm/year")
+print(f"  Wettest region: {np.nanmax(period1_avg_masked.values):.1f} mm/year")
+
+print("\nPeriod 2 (2003-2024):")
+print(f"  Number of years: {len(annual_totals_p2)}")
+print(f"  Mean annual precipitation: {np.nanmean(period2_avg_masked.values):.1f} mm/year")
+print(f"  Driest region: {np.nanmin(period2_avg_masked.values):.1f} mm/year")
+print(f"  Wettest region: {np.nanmax(period2_avg_masked.values):.1f} mm/year")
+
+print("\nChange (2003-2024 minus 1981-2002):")
+mean_change = np.nanmean(difference_masked.values)
+print(f"  Mean change: {mean_change:+.1f} mm/year")
+print(f"  Maximum increase: {np.nanmax(difference_masked.values):+.1f} mm/year")
+print(f"  Maximum decrease: {np.nanmin(difference_masked.values):+.1f} mm/year")
+
+# Calculate percentage of area with increase/decrease
+increase_pct = (difference_masked.values > 0).sum() / mask_da.sum().values * 100
+decrease_pct = (difference_masked.values < 0).sum() / mask_da.sum().values * 100
+
+print(f"\nSpatial Trends:")
+print(f"  Areas with increased precipitation: {increase_pct:.1f}%")
+print(f"  Areas with decreased precipitation: {decrease_pct:.1f}%")
+
+if mean_change > 0:
+    print(f"\n  ⬆ Overall: China experienced WETTER conditions in 2003-2024")
+else:
+    print(f"\n  ⬇ Overall: China experienced DRIER conditions in 2003-2024")
+
+ds.close()
+
+print("\n" + "="*70)
+print("✓ ANALYSIS COMPLETED SUCCESSFULLY")
+print("="*70)
