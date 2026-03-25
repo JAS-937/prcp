@@ -495,8 +495,6 @@ print(centers_df.round(1))
 
 print("\n[5/7] Creating visualizations...")
 
-colors = ['#FF6B6B', '#4ECDC4', '#45B7D1']
-
 fig, axes = plt.subplots(2, 3, figsize=(20, 14))
 axes = axes.flatten()
 panel_labels_dist = ['(a)', '(b)', '(c)', '(d)', '(e)', '(f)']
