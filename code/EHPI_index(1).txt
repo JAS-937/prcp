@@ -13,9 +13,6 @@ from affine import Affine
 import warnings
 warnings.filterwarnings('ignore')
 
-# ===========================
-# ENHANCED FONT SETTINGS
-# ===========================
 rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans']
 rcParams['axes.unicode_minus'] = False
 rcParams['font.size'] = 14
@@ -30,20 +27,14 @@ print("="*80)
 print("EXTREME PRECIPITATION HAZARD INDEX (EPHI) CALCULATION")
 print("="*80)
 
-# =========================
-# PART 1: DATA LOADING
-# =========================
 print("\n[1/8] Loading data from previous analysis...")
 
-# Load indices with cluster labels
 df_indices = pd.read_csv(r'E:\fudao\extreme_indices_clustered.csv')
 print(f"  ✓ Loaded indices data: {len(df_indices):,} samples")
 
-# Load event statistics
 df_events = pd.read_csv(r'E:\fudao\extreme_events_clusterbased.csv')
 print(f"  ✓ Loaded event statistics: {len(df_events):,} grid points")
 
-# Load China boundary
 print("\n[2/8] Loading China boundary...")
 shp_file = r'E:\gis\worldmap\world_adm0\world_adm0.shp'
 
@@ -70,17 +61,12 @@ except Exception as e:
     print(f"  ⚠ Warning: {e}")
     china = None
 
-# =========================
-# PART 2: CLUSTER INTERPRETATION
-# =========================
 print("\n[3/8] Interpreting cluster characteristics...")
 
-# Analyze cluster centers to determine hazard levels
 cluster_stats = df_indices.groupby('cluster')[['RX1day', 'RX5day', 'R20mm', 'R95p']].mean()
 print("\n  Cluster Statistics (Mean Values):")
 print(cluster_stats.round(1))
 
-# Determine which cluster represents high hazard
 cluster_hazard_score = (
     cluster_stats['RX1day'] / cluster_stats['RX1day'].max() * 0.4 +
     cluster_stats['RX5day'] / cluster_stats['RX5day'].max() * 0.3 +
@@ -98,37 +84,28 @@ print("\n  Cluster Interpretation:")
 for hazard_level, cluster_id in cluster_interpretation.items():
     print(f"    Cluster {cluster_id} → {hazard_level}")
 
-# =========================
-# PART 3: DATA PREPARATION
-# =========================
 print("\n[4/8] Preparing indicators for two periods...")
 
-# Define periods
 period1_years = range(1981, 2003)
 period2_years = range(2003, 2025)
 
-# Split data by period
 df_period1 = df_indices[df_indices['year'].isin(period1_years)]
 df_period2 = df_indices[df_indices['year'].isin(period2_years)]
 
-# Calculate average indices per grid point per period
 intensity_indicators = ['RX1day', 'RX5day', 'R20mm', 'R95p']
 
-# Period 1: Average intensity indicators with lat/lon
 period1_agg = df_period1.groupby(['lat_idx', 'lon_idx']).agg({
     **{ind: 'mean' for ind in intensity_indicators},
     'lat': 'first',
     'lon': 'first'
 }).reset_index()
 
-# Period 2: Average intensity indicators with lat/lon
 period2_agg = df_period2.groupby(['lat_idx', 'lon_idx']).agg({
     **{ind: 'mean' for ind in intensity_indicators},
     'lat': 'first',
     'lon': 'first'
 }).reset_index()
 
-# Merge with event statistics (keeping lat/lon from aggregated data)
 period1_data = pd.merge(
     period1_agg, 
     df_events[['lat_idx', 'lon_idx', 'E_C0_freq', 'E_C1_freq', 'E_C2_freq', 'E_transition']], 
@@ -143,30 +120,24 @@ period2_data = pd.merge(
     how='inner'
 )
 
-# Select 8 indicators
 indicator_names = ['RX1day', 'RX5day', 'R20mm', 'R95p', 
                    'E_C0_freq', 'E_C1_freq', 'E_C2_freq', 'E_transition']
 
 print(f"\n  Period 1 (1981-2002): {len(period1_data)} grid points")
 print(f"  Period 2 (2003-2024): {len(period2_data)} grid points")
 
-# =========================
-# PART 4: STANDARDIZATION
-# =========================
 print("\n[5/8] Standardizing indicators...")
 
-# Determine positive/negative indicators
 high_hazard_cluster = cluster_interpretation['High Hazard']
 low_hazard_cluster = cluster_interpretation['Low Hazard']
 
 positive_indicators = ['RX1day', 'RX5day', 'R20mm', 'R95p', 'E_transition']
 positive_indicators.append(f'E_C{high_hazard_cluster}_freq')
 
-# Add medium cluster
 for cluster_id in [0, 1, 2]:
     freq_col = f'E_C{cluster_id}_freq'
     if cluster_id == low_hazard_cluster:
-        pass  # Will invert
+        pass  
     elif freq_col not in positive_indicators:
         positive_indicators.append(freq_col)
 
@@ -174,7 +145,6 @@ print(f"  Positive indicators (higher = more hazardous):")
 for ind in positive_indicators:
     print(f"    - {ind}")
 
-# Standardization function
 def standardize_indicators(data, indicators, global_stats=None):
     """Standardize indicators to [0, 1] range"""
     data_std = data.copy()
@@ -197,7 +167,6 @@ def standardize_indicators(data, indicators, global_stats=None):
     
     return data_std, stats
 
-# Calculate global statistics
 all_data = pd.concat([period1_data, period2_data])
 global_stats = {}
 for col in indicator_names:
@@ -206,11 +175,9 @@ for col in indicator_names:
         'max': all_data[col].max()
     }
 
-# Standardize
 period1_data_std, _ = standardize_indicators(period1_data, indicator_names, global_stats)
 period2_data_std, _ = standardize_indicators(period2_data, indicator_names, global_stats)
 
-# Invert low hazard cluster
 low_cluster_col = f'E_C{low_hazard_cluster}_freq_std'
 if low_cluster_col in period1_data_std.columns:
     period1_data_std[low_cluster_col] = 1 - period1_data_std[low_cluster_col]
@@ -219,14 +186,10 @@ if low_cluster_col in period1_data_std.columns:
 
 print(f"\n  ✓ All indicators standardized to [0, 1]")
 
-# =========================
-# PART 5: WEIGHT CALCULATION
-# =========================
 print("\n[6/8] Calculating indicator weights...")
 
 print("\n  Method 1: AHP (Analytic Hierarchy Process)")
 
-# Judgment matrices
 intensity_matrix = np.array([
     [1.0, 1.0, 2.0, 2.0],
     [1.0, 1.0, 2.0, 2.0],
@@ -263,7 +226,6 @@ print(f"\n    Consistency Check:")
 print(f"      Intensity indicators CR = {intensity_CR:.4f} {'✓ PASS' if intensity_CR < 0.1 else '✗ FAIL'}")
 print(f"      Frequency indicators CR = {frequency_CR:.4f} {'✓ PASS' if frequency_CR < 0.1 else '✗ FAIL'}")
 
-# Combine weights
 ahp_weights = {}
 intensity_group_weight = 0.6
 frequency_group_weight = 0.4
@@ -326,9 +288,6 @@ for col in indicator_names:
     total += combined_weights[col]
 print(f"      {'Total':20s}: {total:.4f}")
 
-# =========================
-# PART 6: CALCULATE EPHI
-# =========================
 print("\n[7/8] Calculating Extreme Precipitation Hazard Index (EPHI)...")
 
 def calculate_ephi(data_std, weights, indicators):
@@ -356,7 +315,6 @@ print(f"    Std:  {period2_data_std['EPHI'].std():.4f}")
 print(f"    Min:  {period2_data_std['EPHI'].min():.4f}")
 print(f"    Max:  {period2_data_std['EPHI'].max():.4f}")
 
-# Define hazard levels
 hazard_levels = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
 hazard_labels = ['Very Low', 'Low', 'Medium', 'High', 'Very High']
 
@@ -370,7 +328,6 @@ period2_data_std['hazard_level'] = pd.cut(period2_data_std['EPHI'],
                                            labels=hazard_labels, 
                                            include_lowest=True)
 
-# Calculate change - FIXED: Ensure lat/lon are preserved
 change_data = pd.merge(
     period1_data_std[['lat_idx', 'lon_idx', 'lat', 'lon', 'EPHI']], 
     period2_data_std[['lat_idx', 'lon_idx', 'EPHI']], 
@@ -387,7 +344,6 @@ print(f"    Std change:  {change_data['EPHI_change'].std():.4f}")
 print(f"    Max increase: {change_data['EPHI_change'].max():.4f}")
 print(f"    Max decrease: {change_data['EPHI_change'].min():.4f}")
 
-# Save results
 print("\n  Saving results to CSV...")
 period1_data_std.to_csv(r'E:\fudao\hazard_index_1981_2002.csv', index=False)
 period2_data_std.to_csv(r'E:\fudao\hazard_index_2003_2024.csv', index=False)
@@ -406,22 +362,16 @@ print(f"  ✓ Saved: hazard_index_2003_2024.csv")
 print(f"  ✓ Saved: hazard_index_change.csv")
 print(f"  ✓ Saved: weights_comparison.csv")
 
-# =========================
-# PART 7: PREPARE SPATIAL DATA
-# =========================
 print("\n[8/8] Creating visualizations...")
 
-# Get unique coordinates
 unique_lats = np.sort(period1_data_std['lat'].unique())
 unique_lons = np.sort(period1_data_std['lon'].unique())
 
 print(f"  Grid dimensions: {len(unique_lats)} x {len(unique_lons)}")
 
-# Create coordinate to index mapping
 lat_to_idx = {lat: i for i, lat in enumerate(unique_lats)}
 lon_to_idx = {lon: i for i, lon in enumerate(unique_lons)}
 
-# Create spatial grids
 def create_spatial_grid(data, value_col):
     """Convert dataframe to 2D grid using coordinate mapping"""
     grid = np.full((len(unique_lats), len(unique_lons)), np.nan)
@@ -443,16 +393,12 @@ ephi_change_grid = create_spatial_grid(change_data, 'EPHI_change')
 
 print(f"  ✓ Spatial grids created")
 
-# =========================
-# FIGURE 1: SPATIAL COMPARISON
-# =========================
 print("\n  Creating Figure 1: Spatial comparison...")
 
 fig = plt.figure(figsize=(24, 8))
 
 cmap_hazard = plt.cm.YlOrRd
 
-# (a) Period 1981-2002
 ax1 = plt.subplot(1, 3, 1, projection=ccrs.PlateCarree())
 ax1.set_extent([70, 140, 15, 55], crs=ccrs.PlateCarree())
 
@@ -487,7 +433,6 @@ cbar1 = plt.colorbar(im1, ax=ax1, orientation='horizontal',
 cbar1.set_label('Hazard Index', fontsize=13, fontweight='bold')
 cbar1.ax.tick_params(labelsize=12)
 
-# (b) Period 2003-2024
 ax2 = plt.subplot(1, 3, 2, projection=ccrs.PlateCarree())
 ax2.set_extent([70, 140, 15, 55], crs=ccrs.PlateCarree())
 
@@ -522,7 +467,6 @@ cbar2 = plt.colorbar(im2, ax=ax2, orientation='horizontal',
 cbar2.set_label('Hazard Index', fontsize=13, fontweight='bold')
 cbar2.ax.tick_params(labelsize=12)
 
-# (c) Change
 ax3 = plt.subplot(1, 3, 3, projection=ccrs.PlateCarree())
 ax3.set_extent([70, 140, 15, 55], crs=ccrs.PlateCarree())
 
@@ -567,20 +511,15 @@ plt.savefig(r'E:\fudao\hazard_spatial_comparison.png', dpi=300, bbox_inches='tig
 print(f"  ✓ Saved: hazard_spatial_comparison.png")
 plt.close()
 
-# =========================
-# FIGURE 2: HAZARD LEVEL DISTRIBUTION
-# =========================
 print("\n  Creating Figure 2: Hazard level distribution...")
 
 fig, axes = plt.subplots(1, 2, figsize=(20, 9), 
                          subplot_kw={'projection': ccrs.PlateCarree()})
 
-colors_level = ['#2E7D32', '#66BB6A', '#FDD835', '#FB8C00', '#D32F2F']
 cmap_discrete = ListedColormap(colors_level)
 bounds = [0, 1, 2, 3, 4, 5]
 norm = BoundaryNorm(bounds, cmap_discrete.N)
 
-# Create level grids
 level_p1_grid = create_spatial_grid(
     period1_data_std.assign(level_num=pd.Categorical(period1_data_std['hazard_level'], 
                                                      categories=hazard_labels).codes),
@@ -593,7 +532,6 @@ level_p2_grid = create_spatial_grid(
     'level_num'
 )
 
-# (a) Period 1981-2002
 ax1 = axes[0]
 ax1.set_extent([70, 140, 15, 55], crs=ccrs.PlateCarree())
 
@@ -629,7 +567,6 @@ cbar1 = plt.colorbar(im1, ax=ax1, orientation='horizontal',
 cbar1.ax.set_xticklabels(hazard_labels, fontsize=11)
 cbar1.set_label('Hazard Level', fontsize=13, fontweight='bold')
 
-# (b) Period 2003-2024
 ax2 = axes[1]
 ax2.set_extent([70, 140, 15, 55], crs=ccrs.PlateCarree())
 
@@ -672,9 +609,6 @@ plt.savefig(r'E:\fudao\hazard_level_distribution.png', dpi=300, bbox_inches='tig
 print(f"  ✓ Saved: hazard_level_distribution.png")
 plt.close()
 
-# =========================
-# FIGURE 3: HAZARD CHANGE HOTSPOT
-# =========================
 print("\n  Creating Figure 3: Hazard change hotspot...")
 
 fig, ax = plt.subplots(figsize=(16, 12), subplot_kw={'projection': ccrs.PlateCarree()})
@@ -739,9 +673,6 @@ plt.savefig(r'E:\fudao\hazard_change_hotspot.png', dpi=300, bbox_inches='tight')
 print(f"  ✓ Saved: hazard_change_hotspot.png")
 plt.close()
 
-# =========================
-# FIGURE 4: WEIGHTS COMPARISON
-# =========================
 print("\n  Creating Figure 4: Weights comparison...")
 
 fig, axes = plt.subplots(1, 2, figsize=(20, 8))
@@ -758,19 +689,18 @@ combined_vals = [combined_weights[col] for col in indicator_names]
 x_pos = np.arange(len(indicators_short))
 width = 0.25
 
-# (a) Bar chart
 ax1 = axes[0]
 
 bars1 = ax1.bar(x_pos - width, ahp_vals, width, 
-               label='AHP', color='#3498db', alpha=0.8, 
+               label='AHP', color='3498db', alpha=0.8, 
                edgecolor='black', linewidth=1.2)
 
 bars2 = ax1.bar(x_pos, entropy_vals, width, 
-               label='Entropy', color='#e74c3c', alpha=0.8, 
+               label='Entropy', color='e74c3c', alpha=0.8, 
                edgecolor='black', linewidth=1.2)
 
 bars3 = ax1.bar(x_pos + width, combined_vals, width, 
-               label='Combined', color='#2ecc71', alpha=0.8, 
+               label='Combined', color='2ecc71', alpha=0.8, 
                edgecolor='black', linewidth=1.2)
 
 ax1.text(0.02, 0.98, '(a)', transform=ax1.transAxes,
@@ -795,7 +725,6 @@ for bars in [bars1, bars2, bars3]:
                     f'{height:.3f}',
                     ha='center', va='bottom', fontsize=9, fontweight='bold')
 
-# (b) Pie chart
 ax2 = axes[1]
 
 intensity_weight = sum(combined_weights[col] for col in intensity_cols)
@@ -803,7 +732,7 @@ frequency_weight = sum(combined_weights[col] for col in frequency_cols)
 
 pie_labels = ['Intensity\nIndicators', 'Frequency &\nStability']
 pie_values = [intensity_weight, frequency_weight]
-pie_colors = ['#FF6B6B', '#4ECDC4']
+pie_colors = ['FF6B6B', '4ECDC4']
 
 wedges, texts, autotexts = ax2.pie(pie_values, labels=pie_labels, autopct='%1.1f%%',
                                     colors=pie_colors, startangle=90,
@@ -828,9 +757,6 @@ plt.savefig(r'E:\fudao\weights_comparison_chart.png', dpi=300, bbox_inches='tigh
 print(f"  ✓ Saved: weights_comparison_chart.png")
 plt.close()
 
-# =========================
-# FINAL SUMMARY
-# =========================
 print("\n" + "="*80)
 print("✓ EPHI CALCULATION COMPLETED")
 print("="*80)
