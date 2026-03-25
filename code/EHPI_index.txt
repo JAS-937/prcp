@@ -375,7 +375,7 @@ print("✓ PART 1 COMPLETED - INDICES CALCULATED AND SAVED")
 print("="*80)
 
 if RUN_MODE == 1:
-    print("\n📌 To run clustering analysis, restart and select mode 2")
+    print("\n To run clustering analysis, restart and select mode 2")
     print("   Or load 'extreme_indices_raw.csv' in a separate script")
     plt.show()
     exit()
